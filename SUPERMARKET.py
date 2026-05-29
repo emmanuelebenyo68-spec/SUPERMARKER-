@@ -34,6 +34,9 @@ if not os.path.exists(base_html_path):
         h1, h2, h3 { color: #1e466e; font-weight: 600; }
         footer { background-color: #ffffffcc; border-radius: 20px; padding: 12px; margin-top: 20px; text-align: center; }
         .stat-number { font-size: 28px; font-weight: bold; color: #1e466e; }
+        /* ADDED: Grid card styling for inventory */
+        .product-card { transition: transform 0.2s; margin-bottom: 20px; }
+        .product-card:hover { transform: translateY(-5px); box-shadow: 0 8px 16px rgba(0,0,0,0.1); }
     </style>
     {% block extra_head %}{% endblock %}
 </head>
@@ -76,7 +79,10 @@ class ConfigManager:
         "receipt_footer": "Thank you for shopping with us!\nVisit again!",
         "receipt_header": "MANUEL SUPERMARKET - Your Trusted Store",
         "enable_branch_support": False,
-        "branches": [{"id": 1, "name": "Main Store", "location": "Nairobi"}]
+        "branches": [{"id": 1, "name": "Main Store", "location": "Nairobi"}],
+        # ADDED: Invoice settings
+        "invoice_terms": "Goods once sold cannot be returned",
+        "quotation_valid_days": 7
     }
 
     def __init__(self, config_path="config.json"):
@@ -229,6 +235,33 @@ class Database:
                 total_sales REAL DEFAULT 0,
                 status TEXT DEFAULT 'active',
                 FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+            -- ADDED: Quotations table
+            CREATE TABLE IF NOT EXISTS quotations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                quote_no TEXT UNIQUE,
+                customer_name TEXT,
+                customer_phone TEXT,
+                quote_date DATE,
+                expiry_date DATE,
+                items_json TEXT,
+                subtotal REAL,
+                tax REAL,
+                total REAL,
+                status TEXT DEFAULT 'draft',
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            -- ADDED: Deliveries table
+            CREATE TABLE IF NOT EXISTS deliveries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                invoice_no TEXT,
+                delivery_address TEXT,
+                delivery_date DATE,
+                status TEXT DEFAULT 'pending',
+                driver_name TEXT,
+                tracking_info TEXT,
+                FOREIGN KEY(invoice_no) REFERENCES sales(invoice_no)
             );
         ''')
         self.conn.commit()
@@ -414,6 +447,18 @@ def generate_invoice_no():
         seq = 1
     return f"INV-{today.strftime('%Y%m%d')}-{seq:04d}"
 
+# ADDED: generate unique quotation number
+def generate_quote_no():
+    today = datetime.now().date()
+    last = db.fetch_one("SELECT quote_no FROM quotations WHERE quote_date = ? ORDER BY id DESC LIMIT 1", (today,))
+    if last:
+        parts = last[0].split('-')
+        last_num = int(parts[-1])
+        seq = last_num + 1
+    else:
+        seq = 1
+    return f"QT-{today.strftime('%Y%m%d')}-{seq:04d}"
+
 def get_active_shift(user_id):
     """Return active shift for the user if any, else None."""
     return db.fetch_one("SELECT id, cashier_name FROM shifts WHERE user_id = ? AND status = 'active'", (user_id,))
@@ -545,14 +590,16 @@ def dashboard():
             <div class="col-md-3 mb-3"><a href="/customers" class="btn btn-warning w-100 py-3">Customers</a></div>
             <div class="col-md-3 mb-3"><a href="/suppliers" class="btn btn-info w-100 py-3">Suppliers</a></div>
             <div class="col-md-3 mb-3"><a href="/users" class="btn btn-danger w-100 py-3">Users</a></div>
-            <div class="col-md-3 mb-3"><a href="/stock_alerts" class="btn btn-outline-danger w-100 py-3">Stock Alerts {% if stats.low_stock > 0 %}<span class="badge bg-danger">{{ stats.low_stock }}</span>{% endif %}</a></div>
-            <div class="col-md-3 mb-3"><a href="/returns" class="btn btn-outline-secondary w-100 py-3">Returns</a></div>
-            <div class="col-md-3 mb-3"><a href="/loyalty" class="btn btn-outline-warning w-100 py-3">Loyalty</a></div>
-            <div class="col-md-3 mb-3"><a href="/expenses" class="btn btn-outline-info w-100 py-3">Expenses</a></div>
-            <div class="col-md-3 mb-3"><a href="/backup" class="btn btn-outline-dark w-100 py-3">Backup</a></div>
-            <div class="col-md-3 mb-3"><a href="/charts" class="btn btn-outline-success w-100 py-3">Advanced Charts</a></div>
-            <div class="col-md-3 mb-3"><a href="/settings" class="btn btn-outline-primary w-100 py-3">Settings</a></div>
-            <div class="col-md-3 mb-3"><a href="/shift/report" class="btn btn-outline-info w-100 py-3">Shift Report</a></div>
+            <div class="col-md-3 mb-3"><a href="/stock_alerts" class="btn btn-danger w-100 py-3">Stock Alerts {% if stats.low_stock > 0 %}<span class="badge bg-danger">{{ stats.low_stock }}</span>{% endif %}</a></div>
+            <div class="col-md-3 mb-3"><a href="/returns" class="btn btn-secondary w-100 py-3">Returns</a></div>
+            <div class="col-md-3 mb-3"><a href="/loyalty" class="btn btn-warning w-100 py-3">Loyalty</a></div>
+            <div class="col-md-3 mb-3"><a href="/expenses" class="btn btn-info w-100 py-3">Expenses</a></div>
+            <div class="col-md-3 mb-3"><a href="/backup" class="btn btn-dark w-100 py-3">Backup</a></div>
+            <div class="col-md-3 mb-3"><a href="/charts" class="btn btn-success w-100 py-3">Advanced Charts</a></div>
+            <div class="col-md-3 mb-3"><a href="/settings" class="btn btn-primary w-100 py-3">Settings</a></div>
+            <div class="col-md-3 mb-3"><a href="/shift/report" class="btn btn-info w-100 py-3">Shift Report</a></div>
+            <!-- ADDED: Invoice Panel Button -->
+            <div class="col-md-3 mb-3"><a href="/invoice_panel" class="btn btn-dark w-100 py-3">📄 Invoice Panel</a></div>
             {% else %}
             <div class="col-md-12 mb-3">
                 {% if stats.active_shift %}
@@ -565,6 +612,8 @@ def dashboard():
             <div class="col-md-4 mx-auto mb-3"><a href="/returns" class="btn btn-secondary w-100 py-3">Returns</a></div>
             <div class="col-md-4 mx-auto mb-3"><a href="/loyalty" class="btn btn-warning w-100 py-3">Loyalty</a></div>
             <div class="col-md-4 mx-auto mb-3"><a href="/change_password" class="btn btn-info w-100 py-3">Change Password</a></div>
+            <!-- ADDED: Invoice Panel Button for cashier -->
+            <div class="col-md-4 mx-auto mb-3"><a href="/invoice_panel" class="btn btn-dark w-100 py-3">Invoice Panel</a></div>
             {% endif %}
         </div>
         {% endblock %}
@@ -929,38 +978,77 @@ def inventory():
         {% extends "base.html" %}
         {% block content %}
         <h2>Inventory Management</h2>
-        <button class="btn btn-success mb-3" data-bs-toggle="modal" data-bs-target="#addModal">+ Add Product</button>
-        <table class="table table-bordered bg-white">
-            <thead>
-                <tr><th>ID</th><th>Barcode</th><th>Name</th><th>Category</th><th>Buying</th><th>Selling</th><th>Stock</th><th>Min</th><th>Unit</th><th>Supplier</th><th>Action</th></table>
-            </thead>
-            <tbody>
+        <div class="mb-3">
+            <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#addModal">+ Add Product</button>
+            <!-- ADDED: Toggle between Table and Grid View -->
+            <button class="btn btn-secondary" id="toggleViewBtn">Switch to Grid View</button>
+        </div>
+        <div id="tableView">
+            <table class="table table-bordered bg-white">
+                <thead>
+                    <tr><th>ID</th><th>Barcode</th><th>Name</th><th>Category</th><th>Buying</th><th>Selling</th><th>Stock</th><th>Min</th><th>Unit</th><th>Supplier</th><th>Action</th></tr>
+                </thead>
+                <tbody>
+                    {% for p in products %}
+                    <tr>
+                        <td>{{ p[0] }}</td><td>{{ p[1] }}</td><td>{{ p[2] }}</td><td>{{ p[3] }}</td>
+                        <td>{{ currency }} {{ p[4] }}</td><td>{{ currency }} {{ p[5] }}</td>
+                        <td id="stock-{{ p[0] }}">{{ p[6] }}</td><td>{{ p[7] }}</td><td>{{ p[8] }}</td><td>{{ p[9] }}</td>
+                        <td>
+                            <a href="/inventory/delete/{{ p[0] }}" class="btn btn-danger btn-sm" onclick="return confirm('Delete?')">Delete</a>
+                            <button class="btn btn-warning btn-sm" data-bs-toggle="modal" data-bs-target="#stockModal{{ p[0] }}">Update Stock</button>
+                        </td>
+                    </tr>
+                    <!-- Stock Update Modal -->
+                    <div class="modal fade" id="stockModal{{ p[0] }}" tabindex="-1">
+                        <div class="modal-dialog">
+                            <div class="modal-content">
+                                <form method="post" action="/update_stock/{{ p[0] }}">
+                                    <div class="modal-header"><h5 class="modal-title">Update Stock for {{ p[2] }}</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                                    <div class="modal-body"><label>New Quantity:</label><input type="number" name="quantity" class="form-control" value="{{ p[6] }}" min="0" required></div>
+                                    <div class="modal-footer"><button type="submit" class="btn btn-primary">Save</button><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button></div>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <!-- ADDED: Grid view (hidden initially) -->
+        <div id="gridView" style="display:none;">
+            <div class="row">
                 {% for p in products %}
-                <tr>
-                    <td>{{ p[0] }}</td><td>{{ p[1] }}</td><td>{{ p[2] }}</td><td>{{ p[3] }}</td>
-                    <td>{{ currency }} {{ p[4] }}</td><td>{{ currency }} {{ p[5] }}</td>
-                    <td id="stock-{{ p[0] }}">{{ p[6] }}</td><td>{{ p[7] }}</td><td>{{ p[8] }}</td><td>{{ p[9] }}</td>
-                    <td>
-                        <a href="/inventory/delete/{{ p[0] }}" class="btn btn-danger btn-sm" onclick="return confirm('Delete?')">Delete</a>
-                        <button class="btn btn-warning btn-sm" data-bs-toggle="modal" data-bs-target="#stockModal{{ p[0] }}">Update Stock</button>
-                    </td>
-                </tr>
-                <!-- Stock Update Modal -->
-                <div class="modal fade" id="stockModal{{ p[0] }}" tabindex="-1">
-                    <div class="modal-dialog">
-                        <div class="modal-content">
-                            <form method="post" action="/update_stock/{{ p[0] }}">
-                                <div class="modal-header"><h5 class="modal-title">Update Stock for {{ p[2] }}</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
-                                <div class="modal-body"><label>New Quantity:</label><input type="number" name="quantity" class="form-control" value="{{ p[6] }}" min="0" required></div>
-                                <div class="modal-footer"><button type="submit" class="btn btn-primary">Save</button><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button></div>
-                            </form>
+                <div class="col-md-3">
+                    <div class="card product-card">
+                        <div class="card-body">
+                            <h5 class="card-title">{{ p[2] }}</h5>
+                            <p class="card-text">Category: {{ p[3] }}<br>Price: {{ currency }} {{ p[5] }}<br>Stock: {{ p[6] }} {{ p[8] }}<br>Supplier: {{ p[9] }}</p>
+                            <button class="btn btn-sm btn-warning" data-bs-toggle="modal" data-bs-target="#stockModal{{ p[0] }}">Update Stock</button>
+                            <a href="/inventory/delete/{{ p[0] }}" class="btn btn-sm btn-danger" onclick="return confirm('Delete?')">Delete</a>
                         </div>
                     </div>
                 </div>
                 {% endfor %}
-            </tbody>
-        </table>
+            </div>
+        </div>
         <div class="modal fade" id="addModal"><div class="modal-dialog"><div class="modal-content"><form method="post" action="/inventory/add"><div class="modal-header"><h5 class="modal-title">Add Product</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div class="mb-2"><label>Name</label><input type="text" name="name" class="form-control" required></div><div class="mb-2"><label>Barcode (optional)</label><input type="text" name="barcode" class="form-control"></div><div class="mb-2"><label>Category</label><input type="text" name="category" class="form-control"></div><div class="mb-2"><label>Buying Price</label><input type="number" step="0.01" name="buying_price" class="form-control" min="0"></div><div class="mb-2"><label>Selling Price</label><input type="number" step="0.01" name="selling_price" class="form-control" required min="0"></div><div class="mb-2"><label>Quantity</label><input type="number" name="quantity" class="form-control" min="0"></div><div class="mb-2"><label>Min Stock</label><input type="number" name="min_stock" class="form-control" value="5" min="0"></div><div class="mb-2"><label>Unit</label><input type="text" name="unit" class="form-control" value="pcs"></div><div class="mb-2"><label>Supplier</label><input type="text" name="supplier" class="form-control"></div></div><div class="modal-footer"><button type="submit" class="btn btn-primary">Save</button><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button></div></form></div></div></div>
+        <script>
+            const toggleBtn = document.getElementById('toggleViewBtn');
+            const tableView = document.getElementById('tableView');
+            const gridView = document.getElementById('gridView');
+            toggleBtn.addEventListener('click', () => {
+                if (tableView.style.display !== 'none') {
+                    tableView.style.display = 'none';
+                    gridView.style.display = 'block';
+                    toggleBtn.innerText = 'Switch to Table View';
+                } else {
+                    tableView.style.display = 'block';
+                    gridView.style.display = 'none';
+                    toggleBtn.innerText = 'Switch to Grid View';
+                }
+            });
+        </script>
         {% endblock %}
     ''', products=products, currency=config_manager.config['currency'], company=config_manager.config['company_name'],
                                   session=session, year=datetime.now().year)
@@ -1022,7 +1110,7 @@ def reports():
         <form method="get" class="row g-3 mb-4"><div class="col-auto"><input type="date" name="from_date" value="{{ from_date }}" class="form-control"></div><div class="col-auto"><input type="date" name="to_date" value="{{ to_date }}" class="form-control"></div><div class="col-auto"><button type="submit" class="btn btn-primary">Generate</button></div></form>
         <h4>Daily Sales</h4><table class="table table-bordered bg-white"><thead><tr><th>Date</th><th>Transactions</th><th>Total ({{ currency }})</th></tr></thead><tbody>{% for s in sales %}<tr><td>{{ s[0] }}</td><td>{{ s[1] }}</td><td>{{ s[2] }}</td></tr>{% endfor %}</tbody></table>
         <h4>Top Products</h4><table class="table bg-white"><thead><tr><th>Product</th><th>Quantity</th><th>Revenue</th></tr></thead><tbody>{% for p in top_products %}<tr><td>{{ p[0] }}</td><td>{{ p[1] }}</td><td>{{ currency }} {{ p[2] }}</td></tr>{% endfor %}</tbody></table>
-        <h4>Payment Methods</h4><table class="table bg-white"><thead><tr><th>Method</th><th>Count</th><th>Amount</th></tr></thead><tbody>{% for pm in payments %}</td><td>{{ pm[0] }}</td><td>{{ pm[1] }}</td><td>{{ currency }} {{ pm[2] }}</td></tr>{% endfor %}</tbody></table>
+        <h4>Payment Methods</h4><table class="table bg-white"><thead><tr><th>Method</th><th>Count</th><th>Amount</th></tr></thead><tbody>{% for pm in payments %}<tr><td>{{ pm[0] }}</td><td>{{ pm[1] }}</td><td>{{ currency }} {{ pm[2] }}</td></tr>{% endfor %}</tbody></table>
         {% endblock %}
     ''', sales=sales, top_products=top_products, payments=payments, from_date=from_date, to_date=to_date,
                                   currency=config_manager.config['currency'],
@@ -1038,22 +1126,88 @@ def customers():
         {% extends "base.html" %}
         {% block content %}
         <h2>Customer Management</h2>
-        <table class="table bg-white"><thead><tr><th>Name</th><th>Phone</th><th>Visits</th><th>Total Spent ({{ currency }})</th></table></thead><tbody>{% for c in customers %}<tr><td>{{ c[0] }}</td><td>{{ c[1] }}</td><td>{{ c[2] }}</td><td>{{ c[3] }}</td></tr>{% endfor %}</tbody></table>
+        <table class="table bg-white"><thead><tr><th>Name</th><th>Phone</th><th>Visits</th><th>Total Spent ({{ currency }})</th></tr></thead><tbody>{% for c in customers %}<tr><td>{{ c[0] }}</td><td>{{ c[1] }}</td><td>{{ c[2] }}</td><td>{{ c[3] }}</td></tr>{% endfor %}</tbody></table>
         {% endblock %}
     ''', customers=rows, currency=config_manager.config['currency'], company=config_manager.config['company_name'],
                                   session=session, year=datetime.now().year)
 
+# MODIFIED: Added edit capability for suppliers
 @app.route('/suppliers')
 @login_required(allowed_roles=['admin'])
 def suppliers():
-    rows = db.fetch_all("SELECT id, name, contact_person, phone, email FROM suppliers")
+    rows = db.fetch_all("SELECT id, name, contact_person, phone, email, address FROM suppliers")
     return render_template_string('''
         {% extends "base.html" %}
         {% block content %}
         <h2>Supplier Management</h2>
-        <table class="table bg-white"><thead><tr><th>ID</th><th>Name</th><th>Contact Person</th><th>Phone</th><th>Email</th></tr></thead><tbody>{% for s in suppliers %}<tr><td>{{ s[0] }}</td><td>{{ s[1] }}</td><td>{{ s[2] }}</td><td>{{ s[3] }}</td><td>{{ s[4] }}</td></tr>{% endfor %}</tbody></table>
+        <button class="btn btn-success mb-3" data-bs-toggle="modal" data-bs-target="#addSupplierModal">+ Add Supplier</button>
+        <table class="table bg-white">
+            <thead><tr><th>ID</th><th>Name</th><th>Contact Person</th><th>Phone</th><th>Email</th><th>Address</th><th>Actions</th></tr></thead>
+            <tbody>
+                {% for s in suppliers %}
+                <tr>
+                    <td>{{ s[0] }}</td><td>{{ s[1] }}</td><td>{{ s[2] }}</td><td>{{ s[3] }}</td><td>{{ s[4] }}</td><td>{{ s[5] }}</td>
+                    <td>
+                        <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#editSupplierModal{{ s[0] }}">Edit</button>
+                        <a href="/suppliers/delete/{{ s[0] }}" class="btn btn-sm btn-danger" onclick="return confirm('Delete supplier?')">Delete</a>
+                    </td>
+                </tr>
+                <!-- Edit Modal -->
+                <div class="modal fade" id="editSupplierModal{{ s[0] }}" tabindex="-1">
+                    <div class="modal-dialog">
+                        <div class="modal-content">
+                            <form method="post" action="/suppliers/edit/{{ s[0] }}">
+                                <div class="modal-header"><h5>Edit Supplier</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                                <div class="modal-body">
+                                    <div class="mb-2"><label>Name</label><input type="text" name="name" class="form-control" value="{{ s[1] }}" required></div>
+                                    <div class="mb-2"><label>Contact Person</label><input type="text" name="contact_person" class="form-control" value="{{ s[2] }}"></div>
+                                    <div class="mb-2"><label>Phone</label><input type="text" name="phone" class="form-control" value="{{ s[3] }}"></div>
+                                    <div class="mb-2"><label>Email</label><input type="email" name="email" class="form-control" value="{{ s[4] }}"></div>
+                                    <div class="mb-2"><label>Address</label><input type="text" name="address" class="form-control" value="{{ s[5] }}"></div>
+                                </div>
+                                <div class="modal-footer"><button type="submit" class="btn btn-primary">Save</button><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button></div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </tbody>
+        </table>
+        <!-- Add Supplier Modal -->
+        <div class="modal fade" id="addSupplierModal" tabindex="-1">
+            <div class="modal-dialog"><div class="modal-content"><form method="post" action="/suppliers/add"><div class="modal-header"><h5>Add Supplier</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div class="mb-2"><label>Name</label><input type="text" name="name" class="form-control" required></div><div class="mb-2"><label>Contact Person</label><input type="text" name="contact_person" class="form-control"></div><div class="mb-2"><label>Phone</label><input type="text" name="phone" class="form-control"></div><div class="mb-2"><label>Email</label><input type="email" name="email" class="form-control"></div><div class="mb-2"><label>Address</label><input type="text" name="address" class="form-control"></div></div><div class="modal-footer"><button type="submit" class="btn btn-primary">Add</button><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button></div></form></div></div></div>
         {% endblock %}
     ''', suppliers=rows, company=config_manager.config['company_name'], session=session, year=datetime.now().year)
+
+@app.route('/suppliers/add', methods=['POST'])
+@login_required(allowed_roles=['admin'])
+def add_supplier():
+    name = request.form['name']
+    contact_person = request.form.get('contact_person', '')
+    phone = request.form.get('phone', '')
+    email = request.form.get('email', '')
+    address = request.form.get('address', '')
+    db.execute_query("INSERT INTO suppliers (name, contact_person, phone, email, address) VALUES (?,?,?,?,?)",
+                     (name, contact_person, phone, email, address))
+    return redirect(url_for('suppliers'))
+
+@app.route('/suppliers/edit/<int:sid>', methods=['POST'])
+@login_required(allowed_roles=['admin'])
+def edit_supplier(sid):
+    name = request.form['name']
+    contact_person = request.form.get('contact_person', '')
+    phone = request.form.get('phone', '')
+    email = request.form.get('email', '')
+    address = request.form.get('address', '')
+    db.execute_query("UPDATE suppliers SET name=?, contact_person=?, phone=?, email=?, address=? WHERE id=?",
+                     (name, contact_person, phone, email, address, sid))
+    return redirect(url_for('suppliers'))
+
+@app.route('/suppliers/delete/<int:sid>')
+@login_required(allowed_roles=['admin'])
+def delete_supplier(sid):
+    db.execute_query("DELETE FROM suppliers WHERE id=?", (sid,))
+    return redirect(url_for('suppliers'))
 
 @app.route('/users', methods=['GET', 'POST'])
 @login_required(allowed_roles=['admin'])
@@ -1079,7 +1233,7 @@ def users():
         {% block content %}
         <h2>User Management</h2>
         <button class="btn btn-success mb-3" data-bs-toggle="modal" data-bs-target="#addModal">+ Add User</button>
-        <table class="table bg-white"><thead><tr><th>ID</th><th>Username</th><th>Role</th><th>Full Name</th><th>Action</th></tr></thead><tbody>{% for u in users %}<tr><td>{{ u[0] }}</td><td>{{ u[1] }}</td><td>{{ u[2] }}</td><td>{{ u[3] }}</td><td><a href="/change_password/{{ u[0] }}" class="btn btn-sm btn-info">Change Password</a></td></tr>{% endfor %}</tbody></table>
+        <table class="table bg-white"><thead><tr><th>ID</th><th>Username</th><th>Role</th><th>Full Name</th><th>Action</th></tr></thead><tbody>{% for u in users %}<tr><td>{{ u[0] }}</td><td>{{ u[1] }}</td><td>{{ u[2] }}</td><td>{{ u[3] }}</td><td><a href="/change_password/{{ u[0] }}" class="btn btn-sm btn-info">Change Password</a></td></tr>{% endfor %}</tbody></tr>
         <div class="modal fade" id="addModal"><div class="modal-dialog"><div class="modal-content"><form method="post"><div class="modal-header"><h5 class="modal-title">Add User</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div class="mb-2"><label>Username</label><input type="text" name="username" class="form-control" required></div><div class="mb-2"><label>Password</label><input type="password" name="password" class="form-control" required></div><div class="mb-2"><label>Role</label><select name="role" class="form-select"><option>admin</option><option>cashier</option></select></div><div class="mb-2"><label>Full Name</label><input type="text" name="full_name" class="form-control" required></div></div><div class="modal-footer"><button type="submit" class="btn btn-primary">Save</button><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button></div></form></div></div></div>
         {% endblock %}
     ''', users=rows, company=config_manager.config['company_name'], session=session, year=datetime.now().year)
@@ -1242,7 +1396,7 @@ def expenses():
         {% block content %}
         <h2>Expense Tracking</h2>
         <form method="post" class="row g-3 mb-4"><div class="col-auto"><input type="text" name="category" placeholder="Category" class="form-control" required></div><div class="col-auto"><input type="number" step="0.01" name="amount" placeholder="Amount" class="form-control" required min="0"></div><div class="col-auto"><input type="text" name="description" placeholder="Description" class="form-control"></div><div class="col-auto"><button type="submit" class="btn btn-primary">Add Expense</button></div></form>
-        <table class="table bg-white"><thead><tr><th>Date</th><th>Category</th><th>Amount ({{ currency }})</th><th>Description</th><th>User</th></tr></thead><tbody>{% for e in expenses %}<tr><td>{{ e[0] }}</td><td>{{ e[1] }}</td><td>{{ e[2] }}</td><td>{{ e[3] }}</td><td>{{ e[4] }}</td></tr>{% endfor %}</tbody></table>
+        <table class="table bg-white"><thead><tr><th>Date</th><th>Category</th><th>Amount ({{ currency }})</th><th>Description</th><th>User</th></tr></thead><tbody>{% for e in expenses %}<td><td>{{ e[0] }}</td><td>{{ e[1] }}</td><td>{{ e[2] }}</td><td>{{ e[3] }}</td><td>{{ e[4] }}</td></tr>{% endfor %}</tbody></table>
         <h4>Total: {{ currency }} {{ total }}</h4>
         {% endblock %}
     ''', expenses=rows, total=total, currency=config_manager.config['currency'],
@@ -1268,6 +1422,9 @@ def settings():
         config_manager.config['receipt_footer'] = request.form['receipt_footer']
         config_manager.config['company_name'] = request.form['company_name']
         config_manager.config['currency'] = request.form['currency']
+        # ADDED: Invoice settings
+        config_manager.config['invoice_terms'] = request.form.get('invoice_terms', config_manager.DEFAULT_CONFIG['invoice_terms'])
+        config_manager.config['quotation_valid_days'] = int(request.form.get('quotation_valid_days', 7))
         config_manager.save_config()
         return redirect(url_for('settings'))
     return render_template_string('''
@@ -1279,6 +1436,8 @@ def settings():
             <div class="mb-3"><label>Currency Symbol</label><input type="text" name="currency" class="form-control" value="{{ config.currency }}"></div>
             <div class="mb-3"><label>Receipt Header</label><textarea name="receipt_header" class="form-control" rows="3">{{ config.receipt_header }}</textarea></div>
             <div class="mb-3"><label>Receipt Footer</label><textarea name="receipt_footer" class="form-control" rows="3">{{ config.receipt_footer }}</textarea></div>
+            <div class="mb-3"><label>Invoice Terms & Conditions</label><textarea name="invoice_terms" class="form-control" rows="2">{{ config.invoice_terms }}</textarea></div>
+            <div class="mb-3"><label>Quotation Validity (days)</label><input type="number" name="quotation_valid_days" class="form-control" value="{{ config.quotation_valid_days }}" min="1"></div>
             <button type="submit" class="btn btn-primary">Save Settings</button>
         </form>
         {% endblock %}
@@ -1335,6 +1494,460 @@ def api_category_sales():
     categories = [c[0] for c in cat_data]
     sales_by_cat = [c[1] for c in cat_data]
     return jsonify({'categories': categories, 'sales': sales_by_cat})
+
+# ==================== ADDED: INVOICE PANEL MODULE ====================
+@app.route('/invoice_panel')
+@login_required()
+def invoice_panel():
+    """Main invoice panel dashboard with links to sub-modules"""
+    return render_template_string('''
+        {% extends "base.html" %}
+        {% block content %}
+        <h2>Invoice Panel</h2>
+        <div class="row">
+            <div class="col-md-4 mb-3"><a href="/quotation" class="btn btn-primary w-100 py-3">📄 Quotations</a></div>
+            <div class="col-md-4 mb-3"><a href="/receipts" class="btn btn-success w-100 py-3">🧾 Receipts</a></div>
+            <div class="col-md-4 mb-3"><a href="/invoice_records" class="btn btn-secondary w-100 py-3">📑 Invoice Records</a></div>
+            <div class="col-md-4 mb-3"><a href="/invoice_settings" class="btn btn-info w-100 py-3">⚙️ Invoice Settings</a></div>
+            <div class="col-md-4 mb-3"><a href="/delivery" class="btn btn-warning w-100 py-3">🚚 Delivery Management</a></div>
+            <div class="col-md-4 mb-3"><a href="/expenses" class="btn btn-danger w-100 py-3">💰 Expenses</a></div>
+        </div>
+        {% endblock %}
+    ''', company=config_manager.config['company_name'], session=session, year=datetime.now().year)
+
+# -------------------- Quotations --------------------
+@app.route('/quotation', methods=['GET', 'POST'])
+@login_required()
+def quotation():
+    if request.method == 'POST':
+        # Create a new quotation
+        data = request.form
+        customer_name = data.get('customer_name', '')
+        customer_phone = data.get('customer_phone', '')
+        items_json = data.get('items_json', '[]')
+        subtotal = float(data.get('subtotal', 0))
+        tax = float(data.get('tax', 0))
+        total = float(data.get('total', 0))
+        quote_no = generate_quote_no()
+        expiry_date = (datetime.now() + timedelta(days=config_manager.config['quotation_valid_days'])).date()
+        db.execute_query(
+            "INSERT INTO quotations (quote_no, customer_name, customer_phone, quote_date, expiry_date, items_json, subtotal, tax, total, status, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (quote_no, customer_name, customer_phone, datetime.now().date(), expiry_date, items_json, subtotal, tax, total, 'draft', session['username']))
+        return redirect(url_for('quotation'))
+    quotes = db.fetch_all("SELECT id, quote_no, customer_name, quote_date, expiry_date, total, status FROM quotations ORDER BY id DESC")
+    # Fetch products for the quote builder modal
+    products = db.fetch_all("SELECT id, name, selling_price FROM products")
+    return render_template_string('''
+        {% extends "base.html" %}
+        {% block content %}
+        <h2>Quotations</h2>
+        <button class="btn btn-success mb-3" data-bs-toggle="modal" data-bs-target="#quoteModal">+ New Quotation</button>
+        <table class="table bg-white">
+            <thead><tr><th>Quote No</th><th>Customer</th><th>Date</th><th>Expiry</th><th>Total ({{ currency }})</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody>
+                {% for q in quotes %}
+                <tr>
+                    <td>{{ q[1] }}</td><td>{{ q[2] }}</td><td>{{ q[3] }}</td><td>{{ q[4] }}</td><td>{{ q[5] }}</td><td>{{ q[6] }}</td>
+                    <td>
+                        <a href="/quotation/view/{{ q[0] }}" class="btn btn-sm btn-info">View</a>
+                        <a href="/quotation/convert/{{ q[0] }}" class="btn btn-sm btn-primary">Convert to Sale</a>
+                        <a href="/quotation/delete/{{ q[0] }}" class="btn btn-sm btn-danger" onclick="return confirm('Delete?')">Delete</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <!-- Modal for creating quotation -->
+        <div class="modal fade" id="quoteModal" tabindex="-1">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header"><h5>Create Quotation</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                    <div class="modal-body">
+                        <div class="mb-2"><label>Customer Name</label><input type="text" id="quote_customer" class="form-control"></div>
+                        <div class="mb-2"><label>Customer Phone</label><input type="text" id="quote_phone" class="form-control"></div>
+                        <h6>Products</h6>
+                        <div class="row">
+                            <div class="col-md-8"><input type="text" id="searchProduct" class="form-control" placeholder="Search product"></div>
+                            <div class="col-md-4"><select id="productSelect" class="form-select"><option>Select Product</option>{% for p in products %}<option value="{{ p[0] }}" data-price="{{ p[2] }}" data-name="{{ p[1] }}">{{ p[1] }} - {{ currency }} {{ p[2] }}</option>{% endfor %}</select></div>
+                        </div>
+                        <button class="btn btn-secondary btn-sm mt-2" id="addProductBtn">Add Selected Product</button>
+                        <table class="table table-sm mt-3" id="quoteItemsTable">
+                            <thead><tr><th>Product</th><th>Price</th><th>Qty</th><th>Total</th><th></th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                        <hr>
+                        <div class="text-end">Subtotal: <span id="quoteSubtotal">0.00</span><br>Tax (16%): <span id="quoteTax">0.00</span><br><strong>Total: <span id="quoteTotal">0.00</span></strong></div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-primary" id="saveQuoteBtn">Save Quotation</button>
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <script>
+            let quoteItems = [];
+            function updateQuoteSummary() {
+                let subtotal = quoteItems.reduce((s,i)=> s + i.price*i.qty, 0);
+                let tax = subtotal * 0.16;
+                let total = subtotal + tax;
+                document.getElementById('quoteSubtotal').innerText = subtotal.toFixed(2);
+                document.getElementById('quoteTax').innerText = tax.toFixed(2);
+                document.getElementById('quoteTotal').innerText = total.toFixed(2);
+                let tbody = document.querySelector('#quoteItemsTable tbody');
+                tbody.innerHTML = '';
+                quoteItems.forEach((item, idx) => {
+                    let row = tbody.insertRow();
+                    row.insertCell(0).innerText = item.name;
+                    row.insertCell(1).innerText = '{{ currency }} ' + item.price.toFixed(2);
+                    row.insertCell(2).innerHTML = `<input type="number" value="${item.qty}" min="1" class="form-control form-control-sm" style="width:80px" data-idx="${idx}">`;
+                    row.insertCell(3).innerText = (item.price * item.qty).toFixed(2);
+                    let delCell = row.insertCell(4);
+                    let delBtn = document.createElement('button');
+                    delBtn.innerText = 'X';
+                    delBtn.className = 'btn btn-sm btn-danger';
+                    delBtn.onclick = () => { quoteItems.splice(idx,1); updateQuoteSummary(); };
+                    delCell.appendChild(delBtn);
+                });
+                document.querySelectorAll('#quoteItemsTable tbody input').forEach(inp => {
+                    inp.addEventListener('change', (e) => {
+                        let idx = parseInt(e.target.dataset.idx);
+                        quoteItems[idx].qty = parseInt(e.target.value);
+                        updateQuoteSummary();
+                    });
+                });
+            }
+            document.getElementById('addProductBtn').addEventListener('click', () => {
+                let select = document.getElementById('productSelect');
+                let option = select.options[select.selectedIndex];
+                if(option.value && option.value !== 'Select Product') {
+                    let id = option.value;
+                    let name = option.dataset.name;
+                    let price = parseFloat(option.dataset.price);
+                    let existing = quoteItems.find(i => i.id == id);
+                    if(existing) existing.qty += 1;
+                    else quoteItems.push({id: id, name: name, price: price, qty: 1});
+                    updateQuoteSummary();
+                }
+            });
+            document.getElementById('saveQuoteBtn').addEventListener('click', () => {
+                if(quoteItems.length === 0) { alert('Add at least one product'); return; }
+                let subtotal = quoteItems.reduce((s,i)=> s + i.price*i.qty, 0);
+                let tax = subtotal * 0.16;
+                let total = subtotal + tax;
+                let form = document.createElement('form');
+                form.method = 'POST';
+                form.action = '/quotation';
+                let csrf = document.createElement('input');
+                csrf.type = 'hidden';
+                csrf.name = 'customer_name';
+                csrf.value = document.getElementById('quote_customer').value;
+                form.appendChild(csrf);
+                let phone = document.createElement('input');
+                phone.type = 'hidden';
+                phone.name = 'customer_phone';
+                phone.value = document.getElementById('quote_phone').value;
+                form.appendChild(phone);
+                let itemsField = document.createElement('input');
+                itemsField.type = 'hidden';
+                itemsField.name = 'items_json';
+                itemsField.value = JSON.stringify(quoteItems);
+                form.appendChild(itemsField);
+                let sub = document.createElement('input');
+                sub.type = 'hidden'; sub.name = 'subtotal'; sub.value = subtotal;
+                form.appendChild(sub);
+                let tx = document.createElement('input');
+                tx.type = 'hidden'; tx.name = 'tax'; tx.value = tax;
+                form.appendChild(tx);
+                let tot = document.createElement('input');
+                tot.type = 'hidden'; tot.name = 'total'; tot.value = total;
+                form.appendChild(tot);
+                document.body.appendChild(form);
+                form.submit();
+            });
+            document.getElementById('searchProduct').addEventListener('keyup', function() {
+                let term = this.value.toLowerCase();
+                let options = document.getElementById('productSelect').options;
+                for(let i=0; i<options.length; i++) {
+                    let txt = options[i].text.toLowerCase();
+                    if(txt.includes(term)) options[i].style.display = '';
+                    else options[i].style.display = 'none';
+                }
+            });
+        </script>
+        {% endblock %}
+    ''', quotes=quotes, products=products, currency=config_manager.config['currency'], company=config_manager.config['company_name'], session=session, year=datetime.now().year)
+
+@app.route('/quotation/view/<int:qid>')
+@login_required()
+def view_quotation(qid):
+    quote = db.fetch_one("SELECT * FROM quotations WHERE id=?", (qid,))
+    if not quote:
+        return "Quotation not found", 404
+    items = json.loads(quote[6])  # items_json column
+    return render_template_string('''
+        {% extends "base.html" %}
+        {% block content %}
+        <h2>Quotation Details</h2>
+        <div class="card"><div class="card-body">
+            <p><strong>Quote No:</strong> {{ quote[1] }}</p>
+            <p><strong>Customer:</strong> {{ quote[2] }} ({{ quote[3] }})</p>
+            <p><strong>Date:</strong> {{ quote[4] }} | <strong>Expiry:</strong> {{ quote[5] }}</p>
+            <p><strong>Status:</strong> {{ quote[10] }}</p>
+            <table class="table"><thead><tr><th>Product</th><th>Price</th><th>Qty</th><th>Total</th></tr></thead><tbody>
+                {% for item in items %}
+                <tr><td>{{ item.name }}</td><td>{{ currency }} {{ item.price }}</td><td>{{ item.qty }}</td><td>{{ currency }} {{ item.price * item.qty }}</td></tr>
+                {% endfor %}
+            </tbody></table>
+            <h5>Subtotal: {{ currency }} {{ quote[7] }} | Tax: {{ currency }} {{ quote[8] }} | Total: {{ currency }} {{ quote[9] }}</h5>
+            <a href="/quotation/convert/{{ quote[0] }}" class="btn btn-primary">Convert to Sale</a>
+            <a href="/quotation" class="btn btn-secondary">Back</a>
+        </div></div>
+        {% endblock %}
+    ''', quote=quote, items=items, currency=config_manager.config['currency'], company=config_manager.config['company_name'], session=session, year=datetime.now().year)
+
+@app.route('/quotation/convert/<int:qid>')
+@login_required()
+def convert_quote_to_sale(qid):
+    quote = db.fetch_one("SELECT * FROM quotations WHERE id=?", (qid,))
+    if not quote:
+        return "Quotation not found", 404
+    items = json.loads(quote[6])
+    # Create sale from quotation
+    customer_name = quote[2]
+    customer_phone = quote[3]
+    subtotal = quote[7]
+    tax = quote[8]
+    net_total = quote[9]
+    invoice_no = generate_invoice_no()
+    try:
+        db.execute_query(
+            "INSERT INTO sales (invoice_no, customer_name, customer_phone, total_amount, discount, tax, net_amount, payment_method, cashier) VALUES (?,?,?,?,?,?,?,?,?)",
+            (invoice_no, customer_name, customer_phone, subtotal, 0, tax, net_total, 'Quote Conversion', session['username']))
+        for item in items:
+            prod = db.fetch_one("SELECT id, selling_price, quantity FROM products WHERE name=?", (item['name'],))
+            if not prod:
+                continue
+            db.execute_query(
+                "INSERT INTO sale_items (invoice_no, product_id, product_name, quantity, unit_price, total) VALUES (?,?,?,?,?,?)",
+                (invoice_no, prod[0], item['name'], item['qty'], item['price'], item['price']*item['qty']))
+            db.execute_query("UPDATE products SET quantity = quantity - ? WHERE id=?", (item['qty'], prod[0]))
+        # Update quotation status
+        db.execute_query("UPDATE quotations SET status='converted' WHERE id=?", (qid,))
+        return render_template_string('''
+            {% extends "base.html" %}
+            {% block content %}
+            <div class="alert alert-success">Quotation converted to sale. Invoice: {{ invoice_no }}</div>
+            <a href="/invoice_records" class="btn btn-primary">View Records</a>
+            {% endblock %}
+        ''', invoice_no=invoice_no, company=config_manager.config['company_name'], session=session, year=datetime.now().year)
+    except Exception as e:
+        return f"Error converting: {str(e)}", 500
+
+@app.route('/quotation/delete/<int:qid>')
+@login_required(allowed_roles=['admin'])
+def delete_quotation(qid):
+    db.execute_query("DELETE FROM quotations WHERE id=?", (qid,))
+    return redirect(url_for('quotation'))
+
+# -------------------- Receipts --------------------
+@app.route('/receipts', methods=['GET', 'POST'])
+@login_required()
+def receipts():
+    if request.method == 'POST':
+        invoice_no = request.form['invoice_no']
+        sale = db.fetch_one("SELECT * FROM sales WHERE invoice_no=?", (invoice_no,))
+        if sale:
+            items = db.fetch_all("SELECT product_name, quantity, unit_price, total FROM sale_items WHERE invoice_no=?", (invoice_no,))
+            return render_template_string('''
+                {% extends "base.html" %}
+                {% block content %}
+                <h2>Receipt</h2>
+                <div class="card"><div class="card-body">
+                    <pre>{{ config_manager.config['receipt_header'] }}
+Invoice: {{ sale[1] }}
+Customer: {{ sale[2] }} ({{ sale[3] }})
+Date: {{ sale[13] }}
+Cashier: {{ sale[11] }}
+--------------------------------
+{% for item in items %}{{ item[0] }} x{{ item[1] }} @ {{ currency }} {{ item[2] }} = {{ currency }} {{ item[3] }}
+{% endfor %}
+--------------------------------
+Subtotal: {{ currency }} {{ sale[4] }}
+Discount: {{ currency }} {{ sale[5] }}
+Tax: {{ currency }} {{ sale[6] }}
+Total: {{ currency }} {{ sale[7] }}
+Payment: {{ sale[8] }}
+{{ config_manager.config['receipt_footer'] }}
+                    </pre>
+                    <button onclick="window.print()" class="btn btn-primary">Print Receipt</button>
+                    <a href="/receipts" class="btn btn-secondary">Back</a>
+                </div></div>
+                {% endblock %}
+            ''', sale=sale, items=items, currency=config_manager.config['currency'], config_manager=config_manager)
+        else:
+            return render_template_string('''
+                {% extends "base.html" %}
+                {% block content %}
+                <div class="alert alert-danger">Invoice not found</div>
+                <a href="/receipts" class="btn btn-secondary">Back</a>
+                {% endblock %}
+            ''')
+    return render_template_string('''
+        {% extends "base.html" %}
+        {% block content %}
+        <h2>Receipt Reprint</h2>
+        <form method="post">
+            <div class="mb-3"><label>Invoice Number</label><input type="text" name="invoice_no" class="form-control" required></div>
+            <button type="submit" class="btn btn-primary">Get Receipt</button>
+        </form>
+        {% endblock %}
+    ''', company=config_manager.config['company_name'], session=session, year=datetime.now().year)
+
+# -------------------- Invoice Records --------------------
+@app.route('/invoice_records')
+@login_required()
+def invoice_records():
+    search = request.args.get('search', '')
+    if search:
+        records = db.fetch_all("SELECT invoice_no, customer_name, net_amount, payment_method, sale_date FROM sales WHERE invoice_no LIKE ? OR customer_name LIKE ? ORDER BY sale_date DESC", (f'%{search}%', f'%{search}%'))
+    else:
+        records = db.fetch_all("SELECT invoice_no, customer_name, net_amount, payment_method, sale_date FROM sales ORDER BY sale_date DESC LIMIT 100")
+    return render_template_string('''
+        {% extends "base.html" %}
+        {% block content %}
+        <h2>Invoice Records</h2>
+        <form method="get" class="mb-3">
+            <div class="input-group"><input type="text" name="search" class="form-control" placeholder="Search by invoice or customer" value="{{ search }}"><button type="submit" class="btn btn-primary">Search</button></div>
+        </form>
+        <table class="table bg-white">
+            <thead><tr><th>Invoice No</th><th>Customer</th><th>Total ({{ currency }})</th><th>Payment</th><th>Date</th><th>Action</th></tr></thead>
+            <tbody>
+                {% for r in records %}
+                <tr>
+                    <td>{{ r[0] }}</td><td>{{ r[1] }}</td><td>{{ r[2] }}</td><td>{{ r[3] }}</td><td>{{ r[4] }}</td>
+                    <td><a href="/receipts?invoice_no={{ r[0] }}" class="btn btn-sm btn-info">View Receipt</a></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endblock %}
+    ''', records=records, search=search, currency=config_manager.config['currency'], company=config_manager.config['company_name'], session=session, year=datetime.now().year)
+
+# -------------------- Invoice Settings (handled in general settings, but dedicated page) --------------------
+@app.route('/invoice_settings', methods=['GET', 'POST'])
+@login_required(allowed_roles=['admin'])
+def invoice_settings():
+    if request.method == 'POST':
+        config_manager.config['invoice_terms'] = request.form['invoice_terms']
+        config_manager.config['quotation_valid_days'] = int(request.form['quotation_valid_days'])
+        config_manager.save_config()
+        return redirect(url_for('invoice_settings'))
+    return render_template_string('''
+        {% extends "base.html" %}
+        {% block content %}
+        <h2>Invoice Specific Settings</h2>
+        <form method="post">
+            <div class="mb-3"><label>Invoice Terms & Conditions</label><textarea name="invoice_terms" class="form-control" rows="4">{{ config.invoice_terms }}</textarea></div>
+            <div class="mb-3"><label>Quotation Validity (days)</label><input type="number" name="quotation_valid_days" class="form-control" value="{{ config.quotation_valid_days }}" min="1"></div>
+            <button type="submit" class="btn btn-primary">Save Settings</button>
+            <a href="/settings" class="btn btn-secondary">General Settings</a>
+        </form>
+        {% endblock %}
+    ''', config=config_manager.config, company=config_manager.config['company_name'], session=session, year=datetime.now().year)
+
+# -------------------- Delivery Management --------------------
+@app.route('/delivery', methods=['GET', 'POST'])
+@login_required()
+def delivery():
+    if request.method == 'POST':
+        invoice_no = request.form['invoice_no']
+        address = request.form['address']
+        driver = request.form.get('driver', '')
+        tracking = request.form.get('tracking', '')
+        delivery_date = request.form.get('delivery_date', datetime.now().date())
+        # Check if delivery already exists
+        existing = db.fetch_one("SELECT id FROM deliveries WHERE invoice_no=?", (invoice_no,))
+        if existing:
+            db.execute_query("UPDATE deliveries SET delivery_address=?, delivery_date=?, driver_name=?, tracking_info=?, status='pending' WHERE invoice_no=?", (address, delivery_date, driver, tracking, invoice_no))
+        else:
+            db.execute_query("INSERT INTO deliveries (invoice_no, delivery_address, delivery_date, driver_name, tracking_info, status) VALUES (?,?,?,?,?,?)", (invoice_no, address, delivery_date, driver, tracking, 'pending'))
+        return redirect(url_for('delivery'))
+    deliveries = db.fetch_all("SELECT d.id, d.invoice_no, d.delivery_address, d.delivery_date, d.status, d.driver_name, d.tracking_info, s.customer_name FROM deliveries d LEFT JOIN sales s ON d.invoice_no=s.invoice_no ORDER BY d.delivery_date DESC")
+    return render_template_string('''
+        {% extends "base.html" %}
+        {% block content %}
+        <h2>Delivery Management</h2>
+        <button class="btn btn-success mb-3" data-bs-toggle="modal" data-bs-target="#addDeliveryModal">+ Create Delivery</button>
+        <table class="table bg-white">
+            <thead><tr><th>Invoice No</th><th>Customer</th><th>Address</th><th>Delivery Date</th><th>Driver</th><th>Tracking</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody>
+                {% for d in deliveries %}
+                <tr>
+                    <td>{{ d[1] }}</td><td>{{ d[7] }}</td><td>{{ d[2] }}</td><td>{{ d[3] }}</td><td>{{ d[5] }}</td><td>{{ d[6] }}</td><td>{{ d[4] }}</td>
+                    <td>
+                        <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#updateDeliveryModal{{ d[0] }}">Update</button>
+                        <a href="/delivery/delete/{{ d[0] }}" class="btn btn-sm btn-danger" onclick="return confirm('Delete?')">Delete</a>
+                    </td>
+                </tr>
+                <!-- Update Modal -->
+                <div class="modal fade" id="updateDeliveryModal{{ d[0] }}" tabindex="-1">
+                    <div class="modal-dialog">
+                        <div class="modal-content">
+                            <form method="post" action="/delivery/update/{{ d[0] }}">
+                                <div class="modal-header"><h5>Update Delivery</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                                <div class="modal-body">
+                                    <div class="mb-2"><label>Address</label><input type="text" name="address" class="form-control" value="{{ d[2] }}" required></div>
+                                    <div class="mb-2"><label>Delivery Date</label><input type="date" name="delivery_date" class="form-control" value="{{ d[3] }}"></div>
+                                    <div class="mb-2"><label>Driver Name</label><input type="text" name="driver" class="form-control" value="{{ d[5] }}"></div>
+                                    <div class="mb-2"><label>Tracking Info</label><input type="text" name="tracking" class="form-control" value="{{ d[6] }}"></div>
+                                    <div class="mb-2"><label>Status</label><select name="status" class="form-select"><option>pending</option><option>shipped</option><option>delivered</option><option>cancelled</option></select></div>
+                                </div>
+                                <div class="modal-footer"><button type="submit" class="btn btn-primary">Save</button><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button></div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </tbody>
+        </table>
+        <!-- Add Delivery Modal -->
+        <div class="modal fade" id="addDeliveryModal" tabindex="-1">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <form method="post">
+                        <div class="modal-header"><h5>Assign Delivery to Invoice</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                        <div class="modal-body">
+                            <div class="mb-2"><label>Invoice Number</label><input type="text" name="invoice_no" class="form-control" required></div>
+                            <div class="mb-2"><label>Delivery Address</label><textarea name="address" class="form-control" required></textarea></div>
+                            <div class="mb-2"><label>Delivery Date</label><input type="date" name="delivery_date" class="form-control" value="{{ today }}"></div>
+                            <div class="mb-2"><label>Driver Name (optional)</label><input type="text" name="driver" class="form-control"></div>
+                            <div class="mb-2"><label>Tracking Info (optional)</label><input type="text" name="tracking" class="form-control"></div>
+                        </div>
+                        <div class="modal-footer"><button type="submit" class="btn btn-primary">Create</button><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button></div>
+                    </form>
+                </div>
+            </div>
+        </div>
+        {% endblock %}
+    ''', deliveries=deliveries, today=datetime.now().date().isoformat(), company=config_manager.config['company_name'], session=session, year=datetime.now().year)
+
+@app.route('/delivery/update/<int:did>', methods=['POST'])
+@login_required(allowed_roles=['admin'])
+def update_delivery(did):
+    address = request.form['address']
+    delivery_date = request.form['delivery_date']
+    driver = request.form.get('driver', '')
+    tracking = request.form.get('tracking', '')
+    status = request.form.get('status', 'pending')
+    db.execute_query("UPDATE deliveries SET delivery_address=?, delivery_date=?, driver_name=?, tracking_info=?, status=? WHERE id=?", (address, delivery_date, driver, tracking, status, did))
+    return redirect(url_for('delivery'))
+
+@app.route('/delivery/delete/<int:did>')
+@login_required(allowed_roles=['admin'])
+def delete_delivery(did):
+    db.execute_query("DELETE FROM deliveries WHERE id=?", (did,))
+    return redirect(url_for('delivery'))
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
