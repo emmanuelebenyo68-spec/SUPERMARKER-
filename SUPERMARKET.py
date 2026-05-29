@@ -34,7 +34,6 @@ if not os.path.exists(base_html_path):
         h1, h2, h3 { color: #1e466e; font-weight: 600; }
         footer { background-color: #ffffffcc; border-radius: 20px; padding: 12px; margin-top: 20px; text-align: center; }
         .stat-number { font-size: 28px; font-weight: bold; color: #1e466e; }
-        /* ADDED: Grid card styling for inventory */
         .product-card { transition: transform 0.2s; margin-bottom: 20px; }
         .product-card:hover { transform: translateY(-5px); box-shadow: 0 8px 16px rgba(0,0,0,0.1); }
     </style>
@@ -80,7 +79,6 @@ class ConfigManager:
         "receipt_header": "MANUEL SUPERMARKET - Your Trusted Store",
         "enable_branch_support": False,
         "branches": [{"id": 1, "name": "Main Store", "location": "Nairobi"}],
-        # ADDED: Invoice settings
         "invoice_terms": "Goods once sold cannot be returned",
         "quotation_valid_days": 7
     }
@@ -236,7 +234,6 @@ class Database:
                 status TEXT DEFAULT 'active',
                 FOREIGN KEY(user_id) REFERENCES users(id)
             );
-            -- ADDED: Quotations table
             CREATE TABLE IF NOT EXISTS quotations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 quote_no TEXT UNIQUE,
@@ -252,7 +249,6 @@ class Database:
                 created_by TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-            -- ADDED: Deliveries table
             CREATE TABLE IF NOT EXISTS deliveries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 invoice_no TEXT,
@@ -266,18 +262,15 @@ class Database:
         ''')
         self.conn.commit()
 
-        # Add shift_id column to existing sales tables (for compatibility with old DBs)
         try:
             self.cursor.execute("ALTER TABLE sales ADD COLUMN shift_id INTEGER")
             self.conn.commit()
         except sqlite3.OperationalError:
-            pass  # column already exists
+            pass
 
     def populate_initial_data(self):
-        # --- Remove any user named 'victor' (case-insensitive) ---
         self.execute_query("DELETE FROM users WHERE LOWER(username) = 'victor'")
 
-        # Admin user: manuel / manuel
         hashed_admin = hashlib.sha256("manuel".encode()).hexdigest()
         if not self.fetch_one("SELECT id FROM users WHERE username='manuel'"):
             self.execute_query("INSERT INTO users (username, password, role, full_name) VALUES (?,?,?,?)",
@@ -285,13 +278,11 @@ class Database:
         else:
             self.execute_query("UPDATE users SET password = ? WHERE username='manuel'", (hashed_admin,))
 
-        # Cashier with password 'cashier'
         hashed_cashier = hashlib.sha256("cashier".encode()).hexdigest()
         if not self.fetch_one("SELECT id FROM users WHERE username='cashier'"):
             self.execute_query("INSERT INTO users (username, password, role, full_name) VALUES (?,?,?,?)",
                                ("cashier", hashed_cashier, "cashier", "Store Cashier"))
 
-        # Suppliers
         if self.fetch_one("SELECT COUNT(*) FROM suppliers")[0] == 0:
             for i in range(1, 21):
                 name = f"Supplier {i}"
@@ -302,7 +293,6 @@ class Database:
                 self.execute_query("INSERT INTO suppliers (name,contact_person,phone,email,address) VALUES (?,?,?,?,?)",
                                    (name, contact, phone, email, address))
 
-        # Loyalty customers
         first_names = ['John', 'Jane', 'Michael', 'Sarah', 'David', 'Linda', 'James', 'Mary', 'Robert', 'Patricia']
         last_names = ['Doe', 'Smith', 'Johnson', 'Brown', 'Williams', 'Jones', 'Garcia', 'Miller', 'Davis', 'Wilson']
         if self.fetch_one("SELECT COUNT(*) FROM loyalty")[0] == 0:
@@ -373,7 +363,7 @@ class Database:
                 "Baby Oil (200ml)", "Baby Shampoo (200ml)", "Baby Lotion (200ml)", "Baby Cereal (250g)",
                 "Formula Milk (400g)", "Fruit Puree (100g)", "Teething Biscuits (100g)", "Baby Bottle (250ml)",
                 "Pacifier (1pc)", "Baby Blanket", "Baby Onesie (0-3m)", "Baby Hat", "Baby Socks (3pairs)",
-                "Bibs (2pcs)", "Burp Cloths (3pcs)"]
+                "Bibs (2pcs)", "Burp Cloths (4pcs)"]
         }
         units = ["pcs", "kg", "L", "g", "ml", "pack"]
         product_count = 0
@@ -447,7 +437,6 @@ def generate_invoice_no():
         seq = 1
     return f"INV-{today.strftime('%Y%m%d')}-{seq:04d}"
 
-# ADDED: generate unique quotation number
 def generate_quote_no():
     today = datetime.now().date()
     last = db.fetch_one("SELECT quote_no FROM quotations WHERE quote_date = ? ORDER BY id DESC LIMIT 1", (today,))
@@ -460,11 +449,9 @@ def generate_quote_no():
     return f"QT-{today.strftime('%Y%m%d')}-{seq:04d}"
 
 def get_active_shift(user_id):
-    """Return active shift for the user if any, else None."""
     return db.fetch_one("SELECT id, cashier_name FROM shifts WHERE user_id = ? AND status = 'active'", (user_id,))
 
 def get_shift_cashier_name(shift_id):
-    """Return cashier display name from shift."""
     if shift_id:
         res = db.fetch_one("SELECT cashier_name FROM shifts WHERE id = ?", (shift_id,))
         if res:
@@ -551,7 +538,6 @@ def dashboard():
                                   (month_start, today))[0]
     pending_returns = db.fetch_one("SELECT COUNT(*) FROM returns WHERE DATE(return_date)=?", (today,))[0]
 
-    # Shift info for cashier
     active_shift = None
     if session['role'] == 'cashier':
         active_shift = get_active_shift(session['user_id'])
@@ -598,8 +584,8 @@ def dashboard():
             <div class="col-md-3 mb-3"><a href="/charts" class="btn btn-success w-100 py-3">Advanced Charts</a></div>
             <div class="col-md-3 mb-3"><a href="/settings" class="btn btn-primary w-100 py-3">Settings</a></div>
             <div class="col-md-3 mb-3"><a href="/shift/report" class="btn btn-info w-100 py-3">Shift Report</a></div>
-            <!-- ADDED: Invoice Panel Button -->
             <div class="col-md-3 mb-3"><a href="/invoice_panel" class="btn btn-dark w-100 py-3">📄 Invoice Panel</a></div>
+            <div class="col-md-3 mb-3"><a href="/invoice_records" class="btn btn-outline-primary w-100 py-3">🧾 Receipt Records</a></div>
             {% else %}
             <div class="col-md-12 mb-3">
                 {% if stats.active_shift %}
@@ -612,8 +598,8 @@ def dashboard():
             <div class="col-md-4 mx-auto mb-3"><a href="/returns" class="btn btn-secondary w-100 py-3">Returns</a></div>
             <div class="col-md-4 mx-auto mb-3"><a href="/loyalty" class="btn btn-warning w-100 py-3">Loyalty</a></div>
             <div class="col-md-4 mx-auto mb-3"><a href="/change_password" class="btn btn-info w-100 py-3">Change Password</a></div>
-            <!-- ADDED: Invoice Panel Button for cashier -->
             <div class="col-md-4 mx-auto mb-3"><a href="/invoice_panel" class="btn btn-dark w-100 py-3">Invoice Panel</a></div>
+            <div class="col-md-4 mx-auto mb-3"><a href="/invoice_records" class="btn btn-outline-primary w-100 py-3">🧾 Receipt Records</a></div>
             {% endif %}
         </div>
         {% endblock %}
@@ -627,7 +613,6 @@ def start_shift():
         display_name = request.form.get('display_name', '').strip()
         if not display_name:
             display_name = session['full_name']
-        # End any open shift first
         db.execute_query("UPDATE shifts SET end_time = CURRENT_TIMESTAMP, status = 'ended' WHERE user_id = ? AND status = 'active'", (session['user_id'],))
         db.execute_query("INSERT INTO shifts (user_id, cashier_name, status) VALUES (?, ?, 'active')", (session['user_id'], display_name))
         return redirect(url_for('dashboard'))
@@ -677,6 +662,7 @@ def shift_report():
         {% endblock %}
     ''', shifts=shifts, currency=config_manager.config['currency'], company=config_manager.config['company_name'], session=session, year=datetime.now().year)
 
+# ==================== FIXED POS ROUTE ====================
 @app.route('/pos', methods=['GET', 'POST'])
 @login_required(allowed_roles=['admin', 'cashier'])
 def pos():
@@ -722,7 +708,6 @@ def pos():
                     db.execute_query(
                         "UPDATE loyalty SET points = points + ?, total_spent = total_spent + ? WHERE customer_phone=?",
                         (points, net_total, customer_phone))
-            # Update shift total sales
             if current_shift_id:
                 db.execute_query("UPDATE shifts SET total_sales = total_sales + ? WHERE id = ?", (net_total, current_shift_id))
             db.log_action(session['username'], "SALE", "sales", invoice_no, "", f"Total: {net_total}")
@@ -732,6 +717,8 @@ def pos():
     else:
         products = db.fetch_all("SELECT id, name, selling_price, quantity, category FROM products WHERE quantity > 0 ORDER BY name")
         customers = db.fetch_all("SELECT customer_name, customer_phone FROM loyalty ORDER BY customer_name")
+        if not products:
+            print("WARNING: No products found in database. Please populate products.")
         return render_template_string('''
             {% extends "base.html" %}
             {% block extra_head %}
@@ -794,153 +781,223 @@ def pos():
                 </div>
             </div>
             <script>
-                let cart = [];
-                function updateCartUI() {
-                    let tbody = document.getElementById('cart-items');
-                    tbody.innerHTML = '';
-                    let total = 0;
-                    cart.forEach((item, idx) => {
-                        let row = tbody.insertRow();
-                        row.insertCell(0).innerText = item.name;
-                        row.insertCell(1).innerText = item.qty;
-                        row.insertCell(2).innerText = '{{ currency }} ' + item.price.toFixed(2);
-                        row.insertCell(3).innerText = '{{ currency }} ' + (item.price * item.qty).toFixed(2);
-                        let delCell = row.insertCell(4);
-                        let delBtn = document.createElement('button');
-                        delBtn.innerText = 'X';
-                        delBtn.className = 'btn btn-sm btn-danger';
-                        delBtn.onclick = () => { cart.splice(idx,1); updateCartUI(); };
-                        delCell.appendChild(delBtn);
-                        total += item.price * item.qty;
-                    });
-                    document.getElementById('total').innerText = '{{ currency }} ' + total.toFixed(2);
-                }
-                function addToCart(id, name, price, stock) {
-                    let qty = prompt('Enter quantity', '1');
-                    if(qty && !isNaN(qty) && parseInt(qty) > 0 && parseInt(qty) <= stock) {
-                        let existing = cart.find(i => i.id == id);
-                        if(existing) existing.qty += parseInt(qty);
-                        else cart.push({id: id, name: name, price: price, qty: parseInt(qty)});
-                        updateCartUI();
-                    } else alert('Invalid quantity or out of stock');
-                }
-                document.querySelectorAll('.add-to-cart').forEach(btn => {
-                    btn.addEventListener('click', () => {
-                        let id = btn.dataset.id;
-                        let name = btn.dataset.name;
-                        let price = parseFloat(btn.dataset.price);
-                        let stock = parseInt(btn.dataset.stock);
-                        addToCart(id, name, price, stock);
-                    });
-                });
-                document.getElementById('barcodeInput').addEventListener('change', function() {
-                    let barcode = this.value;
-                    fetch(`/product_by_barcode/${barcode}`)
-                        .then(res => res.json())
-                        .then(product => {
-                            if(product && product.id) {
-                                addToCart(product.id, product.name, product.price, product.stock);
-                            } else {
-                                alert('Product not found');
-                            }
-                            this.value = '';
+                document.addEventListener('DOMContentLoaded', function() {
+                    let cart = [];
+
+                    function updateCartUI() {
+                        let tbody = document.getElementById('cart-items');
+                        tbody.innerHTML = '';
+                        let total = 0;
+                        cart.forEach((item, idx) => {
+                            let row = tbody.insertRow();
+                            row.insertCell(0).innerText = item.name;
+                            row.insertCell(1).innerText = item.qty;
+                            row.insertCell(2).innerText = '{{ currency }} ' + item.price.toFixed(2);
+                            row.insertCell(3).innerText = '{{ currency }} ' + (item.price * item.qty).toFixed(2);
+                            let delCell = row.insertCell(4);
+                            let delBtn = document.createElement('button');
+                            delBtn.innerText = 'X';
+                            delBtn.className = 'btn btn-sm btn-danger';
+                            delBtn.onclick = () => { cart.splice(idx,1); updateCartUI(); };
+                            delCell.appendChild(delBtn);
+                            total += item.price * item.qty;
                         });
-                });
-                document.getElementById('categoryFilter').addEventListener('change', function() {
-                    let selected = this.value;
-                    let rows = document.querySelectorAll('#product-list tr');
-                    rows.forEach(row => {
-                        let category = row.dataset.category;
-                        if(selected === 'all' || category === selected) {
-                            row.style.display = '';
+                        document.getElementById('total').innerText = '{{ currency }} ' + total.toFixed(2);
+                    }
+
+                    function addToCart(id, name, price, stock) {
+                        let qty = prompt('Enter quantity', '1');
+                        if(qty && !isNaN(qty) && parseInt(qty) > 0 && parseInt(qty) <= stock) {
+                            let existing = cart.find(i => i.id == id);
+                            if(existing) existing.qty += parseInt(qty);
+                            else cart.push({id: id, name: name, price: price, qty: parseInt(qty)});
+                            updateCartUI();
+                            console.log(`Added ${name} x${qty} to cart`);
                         } else {
-                            row.style.display = 'none';
-                        }
-                    });
-                });
-                document.getElementById('search').addEventListener('keyup', function() {
-                    let term = this.value.toLowerCase();
-                    let rows = document.querySelectorAll('#product-list tr');
-                    rows.forEach(row => {
-                        let name = row.cells[1].innerText.toLowerCase();
-                        if(name.includes(term)) row.style.display = '';
-                        else row.style.display = 'none';
-                    });
-                });
-                document.getElementById('cust_phone').addEventListener('change', function() {
-                    let phone = this.value;
-                    let customerList = document.getElementById('customerList').options;
-                    for(let opt of customerList) {
-                        if(opt.value === phone) {
-                            document.getElementById('cust_name').value = opt.text.split(' - ')[0];
-                            break;
+                            alert('Invalid quantity or out of stock');
                         }
                     }
-                });
-                document.getElementById('checkout-btn').addEventListener('click', () => {
-                    if(cart.length === 0) { alert('Cart empty'); return; }
-                    let paymentMethod = document.getElementById('paymentMethod').value;
-                    let mpesaPhone = '';
-                    if(paymentMethod === 'MPESA') {
-                        mpesaPhone = prompt("Enter MPESA phone number (e.g., 0712345678):");
-                        if(!mpesaPhone || mpesaPhone.trim() === '') {
-                            alert("MPESA phone number is required!");
-                            return;
+
+                    document.getElementById('product-list').addEventListener('click', function(e) {
+                        let btn = e.target.closest('.add-to-cart');
+                        if(btn) {
+                            let id = btn.dataset.id;
+                            let name = btn.dataset.name;
+                            let price = parseFloat(btn.dataset.price);
+                            let stock = parseInt(btn.dataset.stock);
+                            addToCart(id, name, price, stock);
                         }
-                        if(!confirm(`Simulating MPESA payment of ${document.getElementById('total').innerText} from ${mpesaPhone}. Proceed?`)) {
-                            return;
+                    });
+
+                    document.getElementById('barcodeInput').addEventListener('change', function() {
+                        let barcode = this.value;
+                        fetch(`/product_by_barcode/${barcode}`)
+                            .then(res => res.json())
+                            .then(product => {
+                                if(product && product.id) {
+                                    addToCart(product.id, product.name, product.price, product.stock);
+                                } else {
+                                    alert('Product not found');
+                                }
+                                this.value = '';
+                            });
+                    });
+
+                    document.getElementById('categoryFilter').addEventListener('change', function() {
+                        let selected = this.value;
+                        let rows = document.querySelectorAll('#product-list tr');
+                        rows.forEach(row => {
+                            let category = row.dataset.category;
+                            if(selected === 'all' || category === selected) {
+                                row.style.display = '';
+                            } else {
+                                row.style.display = 'none';
+                            }
+                        });
+                    });
+
+                    document.getElementById('search').addEventListener('keyup', function() {
+                        let term = this.value.toLowerCase();
+                        let rows = document.querySelectorAll('#product-list tr');
+                        rows.forEach(row => {
+                            let name = row.cells[1].innerText.toLowerCase();
+                            if(name.includes(term)) row.style.display = '';
+                            else row.style.display = 'none';
+                        });
+                    });
+
+                    document.getElementById('cust_phone').addEventListener('change', function() {
+                        let phone = this.value;
+                        let customerList = document.getElementById('customerList').options;
+                        for(let opt of customerList) {
+                            if(opt.value === phone) {
+                                document.getElementById('cust_name').value = opt.text.split(' - ')[0];
+                                break;
+                            }
                         }
-                        document.getElementById('cust_phone').value = mpesaPhone;
-                    }
-                    let customerPhone = document.getElementById('cust_phone').value;
-                    if (!customerPhone && paymentMethod !== 'MPESA') {
-                        let phoneInput = prompt("Enter customer phone number for loyalty points (or cancel to skip):");
-                        if (phoneInput !== null && phoneInput.trim() !== "") {
-                            customerPhone = phoneInput.trim();
-                            document.getElementById('cust_phone').value = customerPhone;
-                            let customerList = document.getElementById('customerList').options;
-                            let foundName = "";
-                            for(let opt of customerList) {
-                                if(opt.value === customerPhone) {
-                                    foundName = opt.text.split(' - ')[0];
-                                    break;
+                    });
+
+                    document.getElementById('checkout-btn').addEventListener('click', () => {
+                        if(cart.length === 0) { alert('Cart empty'); return; }
+                        let paymentMethod = document.getElementById('paymentMethod').value;
+                        let mpesaPhone = '';
+                        if(paymentMethod === 'MPESA') {
+                            mpesaPhone = prompt("Enter MPESA phone number (e.g., 0712345678):");
+                            if(!mpesaPhone || mpesaPhone.trim() === '') {
+                                alert("MPESA phone number is required!");
+                                return;
+                            }
+                            if(!confirm(`Simulating MPESA payment of ${document.getElementById('total').innerText} from ${mpesaPhone}. Proceed?`)) {
+                                return;
+                            }
+                            document.getElementById('cust_phone').value = mpesaPhone;
+                        }
+                        let customerPhone = document.getElementById('cust_phone').value;
+                        if (!customerPhone && paymentMethod !== 'MPESA') {
+                            let phoneInput = prompt("Enter customer phone number for loyalty points (or cancel to skip):");
+                            if (phoneInput !== null && phoneInput.trim() !== "") {
+                                customerPhone = phoneInput.trim();
+                                document.getElementById('cust_phone').value = customerPhone;
+                                let customerList = document.getElementById('customerList').options;
+                                let foundName = "";
+                                for(let opt of customerList) {
+                                    if(opt.value === customerPhone) {
+                                        foundName = opt.text.split(' - ')[0];
+                                        break;
+                                    }
+                                }
+                                if (foundName) {
+                                    document.getElementById('cust_name').value = foundName;
+                                } else {
+                                    let nameInput = prompt("New customer! Enter customer name:", "Walk-in Customer");
+                                    if (nameInput) document.getElementById('cust_name').value = nameInput;
                                 }
                             }
-                            if (foundName) {
-                                document.getElementById('cust_name').value = foundName;
-                            } else {
-                                let nameInput = prompt("New customer! Enter customer name:", "Walk-in Customer");
-                                if (nameInput) document.getElementById('cust_name').value = nameInput;
-                            }
+                        }
+                        let discountPercent = parseFloat(document.getElementById('discount').value) || 0;
+                        let subtotal = cart.reduce((s,i)=> s + i.price * i.qty, 0);
+                        let discountAmount = subtotal * discountPercent / 100;
+                        let net = subtotal - discountAmount + (subtotal - discountAmount) * 0.16;
+                        fetch('/pos', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({
+                                cart: cart.map(i => ({id: i.id, name: i.name, quantity: i.qty, price: i.price, total: i.price * i.qty})),
+                                customer_name: document.getElementById('cust_name').value,
+                                customer_phone: document.getElementById('cust_phone').value,
+                                payment_method: paymentMethod,
+                                discount: discountAmount
+                            })
+                        }).then(res => res.json()).then(data => {
+                            if(data.status === 'success') {
+                                openReceiptWindow(data.invoice, data.cashier, cart, discountAmount, paymentMethod,
+                                                 document.getElementById('cust_name').value,
+                                                 document.getElementById('cust_phone').value,
+                                                 data.net_total, subtotal);
+                                setTimeout(() => { location.reload(); }, 500);
+                            } else alert('Error: '+data.message);
+                        });
+                    });
+
+                    function openReceiptWindow(invoiceNo, cashier, cart, discountAmount, paymentMethod, customerName, customerPhone, netTotal, subtotal) {
+                        const currency = '{{ currency }}';
+                        const header = `{{ config_manager.config['receipt_header'] }}`;
+                        const footer = `{{ config_manager.config['receipt_footer'] }}`;
+                        const now = new Date();
+                        const dateStr = now.toLocaleString();
+                        let itemsHtml = '';
+                        cart.forEach(item => {
+                            itemsHtml += `<tr><td>${item.name}</td><td align="center">${item.qty}</td><td align="right">${currency} ${item.price.toFixed(2)}</td><td align="right">${currency} ${(item.price * item.qty).toFixed(2)}</td></tr>`;
+                        });
+                        const tax = (subtotal - discountAmount) * 0.16;
+                        const receiptHtml = `
+                        <!DOCTYPE html>
+                        <html>
+                        <head><meta charset="UTF-8"><title>Invoice ${invoiceNo}</title>
+                        <style>
+                            body { font-family: monospace; margin: 20px; }
+                            .receipt { max-width: 400px; margin: auto; border: 1px solid #ccc; padding: 20px; border-radius: 8px; }
+                            h2 { text-align: center; }
+                            table { width: 100%%; border-collapse: collapse; margin: 10px 0; }
+                            th, td { text-align: left; padding: 4px; }
+                            .total { font-weight: bold; font-size: 1.2em; margin-top: 10px; }
+                            .footer { text-align: center; margin-top: 20px; font-size: 0.9em; }
+                            button { margin-top: 20px; padding: 8px 16px; background: #2b6e3c; color: white; border: none; cursor: pointer; width: 100%%; }
+                            @media print { button { display: none; } }
+                        </style>
+                        </head>
+                        <body>
+                        <div class="receipt">
+                            <h2>${header}</h2>
+                            <p><strong>Invoice:</strong> ${invoiceNo}<br>
+                            <strong>Date:</strong> ${dateStr}<br>
+                            <strong>Cashier:</strong> ${cashier}<br>
+                            <strong>Customer:</strong> ${customerName || 'Walk-in'} (${customerPhone || '—'})<br>
+                            <strong>Payment:</strong> ${paymentMethod}</p>
+                            <hr>
+                            <table>
+                                <thead><tr><th>Item</th><th>Qty</th><th>Price</th><th>Total</th></tr></thead>
+                                <tbody>${itemsHtml}</tbody>
+                            </table>
+                            <hr>
+                            <p>Subtotal: ${currency} ${subtotal.toFixed(2)}<br>
+                            Discount: -${currency} ${discountAmount.toFixed(2)}<br>
+                            Tax (16%%): ${currency} ${tax.toFixed(2)}<br>
+                            <strong class="total">TOTAL: ${currency} ${netTotal.toFixed(2)}</strong></p>
+                            <div class="footer">${footer}</div>
+                            <button onclick="window.print();">🖨️ Print Receipt</button>
+                        </div>
+                        <script>window.onload = function() { window.print(); };<\/script>
+                        </body>
+                        </html>`;
+                        const win = window.open('', '_blank');
+                        if (win) {
+                            win.document.write(receiptHtml);
+                            win.document.close();
+                        } else {
+                            alert('Please allow pop-ups to view the receipt.');
                         }
                     }
-                    let discount = parseFloat(document.getElementById('discount').value) || 0;
-                    let subtotal = cart.reduce((s,i)=> s + i.price * i.qty, 0);
-                    let discountAmount = subtotal * discount / 100;
-                    let net = subtotal - discountAmount + (subtotal - discountAmount) * 0.16;
-                    fetch('/pos', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({
-                            cart: cart.map(i => ({id: i.id, name: i.name, quantity: i.qty, price: i.price, total: i.price * i.qty})),
-                            customer_name: document.getElementById('cust_name').value,
-                            customer_phone: document.getElementById('cust_phone').value,
-                            payment_method: paymentMethod,
-                            discount: discountAmount
-                        })
-                    }).then(res => res.json()).then(data => {
-                        if(data.status === 'success') {
-                            if(confirm('Sale complete! Print receipt?')) {
-                                let receipt = `{{ config_manager.config['receipt_header'] }}\\nInvoice: ${data.invoice}\\nCashier: ${data.cashier}\\nTotal: {{ currency }} ${data.net_total.toFixed(2)}\\n{{ receipt_footer }}`;
-                                let printWindow = window.open('', '_blank');
-                                printWindow.document.write(`<pre>${receipt}</pre>`);
-                                printWindow.print();
-                            }
-                            cart = [];
-                            updateCartUI();
-                            location.reload();
-                        } else alert('Error: '+data.message);
-                    });
                 });
             </script>
             {% endblock %}
@@ -949,6 +1006,7 @@ def pos():
                                       receipt_footer=config_manager.config['receipt_footer'], session=session,
                                       year=datetime.now().year, config_manager=config_manager)
 
+# ==================== REMAINING ORIGINAL ROUTES ====================
 @app.route('/product_by_barcode/<barcode>')
 @login_required(allowed_roles=['admin', 'cashier'])
 def product_by_barcode(barcode):
@@ -980,7 +1038,6 @@ def inventory():
         <h2>Inventory Management</h2>
         <div class="mb-3">
             <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#addModal">+ Add Product</button>
-            <!-- ADDED: Toggle between Table and Grid View -->
             <button class="btn btn-secondary" id="toggleViewBtn">Switch to Grid View</button>
         </div>
         <div id="tableView">
@@ -997,9 +1054,8 @@ def inventory():
                         <td>
                             <a href="/inventory/delete/{{ p[0] }}" class="btn btn-danger btn-sm" onclick="return confirm('Delete?')">Delete</a>
                             <button class="btn btn-warning btn-sm" data-bs-toggle="modal" data-bs-target="#stockModal{{ p[0] }}">Update Stock</button>
-                        </td>
+                         </td>
                     </tr>
-                    <!-- Stock Update Modal -->
                     <div class="modal fade" id="stockModal{{ p[0] }}" tabindex="-1">
                         <div class="modal-dialog">
                             <div class="modal-content">
@@ -1015,7 +1071,6 @@ def inventory():
                 </tbody>
             </table>
         </div>
-        <!-- ADDED: Grid view (hidden initially) -->
         <div id="gridView" style="display:none;">
             <div class="row">
                 {% for p in products %}
@@ -1131,7 +1186,6 @@ def customers():
     ''', customers=rows, currency=config_manager.config['currency'], company=config_manager.config['company_name'],
                                   session=session, year=datetime.now().year)
 
-# MODIFIED: Added edit capability for suppliers
 @app.route('/suppliers')
 @login_required(allowed_roles=['admin'])
 def suppliers():
@@ -1150,9 +1204,8 @@ def suppliers():
                     <td>
                         <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#editSupplierModal{{ s[0] }}">Edit</button>
                         <a href="/suppliers/delete/{{ s[0] }}" class="btn btn-sm btn-danger" onclick="return confirm('Delete supplier?')">Delete</a>
-                    </td>
+                     </td>
                 </tr>
-                <!-- Edit Modal -->
                 <div class="modal fade" id="editSupplierModal{{ s[0] }}" tabindex="-1">
                     <div class="modal-dialog">
                         <div class="modal-content">
@@ -1173,7 +1226,6 @@ def suppliers():
                 {% endfor %}
             </tbody>
         </table>
-        <!-- Add Supplier Modal -->
         <div class="modal fade" id="addSupplierModal" tabindex="-1">
             <div class="modal-dialog"><div class="modal-content"><form method="post" action="/suppliers/add"><div class="modal-header"><h5>Add Supplier</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div class="mb-2"><label>Name</label><input type="text" name="name" class="form-control" required></div><div class="mb-2"><label>Contact Person</label><input type="text" name="contact_person" class="form-control"></div><div class="mb-2"><label>Phone</label><input type="text" name="phone" class="form-control"></div><div class="mb-2"><label>Email</label><input type="email" name="email" class="form-control"></div><div class="mb-2"><label>Address</label><input type="text" name="address" class="form-control"></div></div><div class="modal-footer"><button type="submit" class="btn btn-primary">Add</button><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button></div></form></div></div></div>
         {% endblock %}
@@ -1233,7 +1285,7 @@ def users():
         {% block content %}
         <h2>User Management</h2>
         <button class="btn btn-success mb-3" data-bs-toggle="modal" data-bs-target="#addModal">+ Add User</button>
-        <table class="table bg-white"><thead><tr><th>ID</th><th>Username</th><th>Role</th><th>Full Name</th><th>Action</th></tr></thead><tbody>{% for u in users %}<tr><td>{{ u[0] }}</td><td>{{ u[1] }}</td><td>{{ u[2] }}</td><td>{{ u[3] }}</td><td><a href="/change_password/{{ u[0] }}" class="btn btn-sm btn-info">Change Password</a></td></tr>{% endfor %}</tbody></tr>
+        <table class="table bg-white"><thead><tr><th>ID</th><th>Username</th><th>Role</th><th>Full Name</th><th>Action</th></table></thead><tbody>{% for u in users %}<tr><td>{{ u[0] }}</td><td>{{ u[1] }}</td><td>{{ u[2] }}</td><td>{{ u[3] }}</td><td><a href="/change_password/{{ u[0] }}" class="btn btn-sm btn-info">Change Password</a></td></tr>{% endfor %}</tbody></table>
         <div class="modal fade" id="addModal"><div class="modal-dialog"><div class="modal-content"><form method="post"><div class="modal-header"><h5 class="modal-title">Add User</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div class="mb-2"><label>Username</label><input type="text" name="username" class="form-control" required></div><div class="mb-2"><label>Password</label><input type="password" name="password" class="form-control" required></div><div class="mb-2"><label>Role</label><select name="role" class="form-select"><option>admin</option><option>cashier</option></select></div><div class="mb-2"><label>Full Name</label><input type="text" name="full_name" class="form-control" required></div></div><div class="modal-footer"><button type="submit" class="btn btn-primary">Save</button><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button></div></form></div></div></div>
         {% endblock %}
     ''', users=rows, company=config_manager.config['company_name'], session=session, year=datetime.now().year)
@@ -1396,7 +1448,7 @@ def expenses():
         {% block content %}
         <h2>Expense Tracking</h2>
         <form method="post" class="row g-3 mb-4"><div class="col-auto"><input type="text" name="category" placeholder="Category" class="form-control" required></div><div class="col-auto"><input type="number" step="0.01" name="amount" placeholder="Amount" class="form-control" required min="0"></div><div class="col-auto"><input type="text" name="description" placeholder="Description" class="form-control"></div><div class="col-auto"><button type="submit" class="btn btn-primary">Add Expense</button></div></form>
-        <table class="table bg-white"><thead><tr><th>Date</th><th>Category</th><th>Amount ({{ currency }})</th><th>Description</th><th>User</th></tr></thead><tbody>{% for e in expenses %}<td><td>{{ e[0] }}</td><td>{{ e[1] }}</td><td>{{ e[2] }}</td><td>{{ e[3] }}</td><td>{{ e[4] }}</td></tr>{% endfor %}</tbody></table>
+        <table class="table bg-white"><thead><tr><th>Date</th><th>Category</th><th>Amount ({{ currency }})</th><th>Description</th><th>User</th></tr></thead><tbody>{% for e in expenses %}<tr><td>{{ e[0] }}</td><td>{{ e[1] }}</td><td>{{ e[2] }}</td><td>{{ e[3] }}</td><td>{{ e[4] }}</td></tr>{% endfor %}</tbody></table>
         <h4>Total: {{ currency }} {{ total }}</h4>
         {% endblock %}
     ''', expenses=rows, total=total, currency=config_manager.config['currency'],
@@ -1422,7 +1474,6 @@ def settings():
         config_manager.config['receipt_footer'] = request.form['receipt_footer']
         config_manager.config['company_name'] = request.form['company_name']
         config_manager.config['currency'] = request.form['currency']
-        # ADDED: Invoice settings
         config_manager.config['invoice_terms'] = request.form.get('invoice_terms', config_manager.DEFAULT_CONFIG['invoice_terms'])
         config_manager.config['quotation_valid_days'] = int(request.form.get('quotation_valid_days', 7))
         config_manager.save_config()
@@ -1499,7 +1550,6 @@ def api_category_sales():
 @app.route('/invoice_panel')
 @login_required()
 def invoice_panel():
-    """Main invoice panel dashboard with links to sub-modules"""
     return render_template_string('''
         {% extends "base.html" %}
         {% block content %}
@@ -1520,7 +1570,6 @@ def invoice_panel():
 @login_required()
 def quotation():
     if request.method == 'POST':
-        # Create a new quotation
         data = request.form
         customer_name = data.get('customer_name', '')
         customer_phone = data.get('customer_phone', '')
@@ -1535,7 +1584,6 @@ def quotation():
             (quote_no, customer_name, customer_phone, datetime.now().date(), expiry_date, items_json, subtotal, tax, total, 'draft', session['username']))
         return redirect(url_for('quotation'))
     quotes = db.fetch_all("SELECT id, quote_no, customer_name, quote_date, expiry_date, total, status FROM quotations ORDER BY id DESC")
-    # Fetch products for the quote builder modal
     products = db.fetch_all("SELECT id, name, selling_price FROM products")
     return render_template_string('''
         {% extends "base.html" %}
@@ -1552,12 +1600,11 @@ def quotation():
                         <a href="/quotation/view/{{ q[0] }}" class="btn btn-sm btn-info">View</a>
                         <a href="/quotation/convert/{{ q[0] }}" class="btn btn-sm btn-primary">Convert to Sale</a>
                         <a href="/quotation/delete/{{ q[0] }}" class="btn btn-sm btn-danger" onclick="return confirm('Delete?')">Delete</a>
-                    </td>
+                     </td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
-        <!-- Modal for creating quotation -->
         <div class="modal fade" id="quoteModal" tabindex="-1">
             <div class="modal-dialog modal-lg">
                 <div class="modal-content">
@@ -1684,7 +1731,7 @@ def view_quotation(qid):
     quote = db.fetch_one("SELECT * FROM quotations WHERE id=?", (qid,))
     if not quote:
         return "Quotation not found", 404
-    items = json.loads(quote[6])  # items_json column
+    items = json.loads(quote[6])
     return render_template_string('''
         {% extends "base.html" %}
         {% block content %}
@@ -1713,7 +1760,6 @@ def convert_quote_to_sale(qid):
     if not quote:
         return "Quotation not found", 404
     items = json.loads(quote[6])
-    # Create sale from quotation
     customer_name = quote[2]
     customer_phone = quote[3]
     subtotal = quote[7]
@@ -1732,7 +1778,6 @@ def convert_quote_to_sale(qid):
                 "INSERT INTO sale_items (invoice_no, product_id, product_name, quantity, unit_price, total) VALUES (?,?,?,?,?,?)",
                 (invoice_no, prod[0], item['name'], item['qty'], item['price'], item['price']*item['qty']))
             db.execute_query("UPDATE products SET quantity = quantity - ? WHERE id=?", (item['qty'], prod[0]))
-        # Update quotation status
         db.execute_query("UPDATE quotations SET status='converted' WHERE id=?", (qid,))
         return render_template_string('''
             {% extends "base.html" %}
@@ -1866,7 +1911,6 @@ def delivery():
         driver = request.form.get('driver', '')
         tracking = request.form.get('tracking', '')
         delivery_date = request.form.get('delivery_date', datetime.now().date())
-        # Check if delivery already exists
         existing = db.fetch_one("SELECT id FROM deliveries WHERE invoice_no=?", (invoice_no,))
         if existing:
             db.execute_query("UPDATE deliveries SET delivery_address=?, delivery_date=?, driver_name=?, tracking_info=?, status='pending' WHERE invoice_no=?", (address, delivery_date, driver, tracking, invoice_no))
@@ -1888,9 +1932,8 @@ def delivery():
                     <td>
                         <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#updateDeliveryModal{{ d[0] }}">Update</button>
                         <a href="/delivery/delete/{{ d[0] }}" class="btn btn-sm btn-danger" onclick="return confirm('Delete?')">Delete</a>
-                    </td>
+                     </td>
                 </tr>
-                <!-- Update Modal -->
                 <div class="modal fade" id="updateDeliveryModal{{ d[0] }}" tabindex="-1">
                     <div class="modal-dialog">
                         <div class="modal-content">
@@ -1911,7 +1954,6 @@ def delivery():
                 {% endfor %}
             </tbody>
         </table>
-        <!-- Add Delivery Modal -->
         <div class="modal fade" id="addDeliveryModal" tabindex="-1">
             <div class="modal-dialog">
                 <div class="modal-content">
